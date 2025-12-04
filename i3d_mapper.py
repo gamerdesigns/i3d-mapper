@@ -5,9 +5,7 @@ import re
 import sys
 from datetime import datetime
 
-# ==========================================
-# CONFIG
-# ==========================================
+
 NODE_TYPES = [
     "node", "repr", "startNode", "endNode", "linkNode", "jointNode", "shaderNode",
     "rotateNode", "referencePoint", "referenceFrame", "index", "effectNode",
@@ -28,20 +26,33 @@ MEMORY_TAGS = [
     "instanceIndexBufferMemoryUsage",
 ]
 
-LOG_FILE_PATH = None  # will be set per mod
+LOG_FILE_PATH = None
+CURRENT_MOD_ROOT = None
 
 
-# ==========================================
-# LOGGING
-# ==========================================
 def init_logger(mod_root: str):
-    global LOG_FILE_PATH
+    """
+    Initialize logger for a given mod root.
+
+    Each time the script is run, the log for that mod is reset.
+    If multiple files from the same mod are processed in one run,
+    they will all share this single fresh log file.
+    """
+    global LOG_FILE_PATH, CURRENT_MOD_ROOT
+    CURRENT_MOD_ROOT = mod_root
     LOG_FILE_PATH = os.path.join(mod_root, "log.txt")
-    header = f"I3D Mapper Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    header += "========================================\n"
+
+    header = (
+        f"I3D Mapper Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "========================================\n"
+    )
+
+
     with open(LOG_FILE_PATH, "w", encoding="utf-8") as f:
         f.write(header)
+
     print(header, end="")
+
 
 
 def log(msg: str):
@@ -52,13 +63,9 @@ def log(msg: str):
 
 
 def rename_logger(msg: str):
-    # simple alias to go through same logger
     log(msg)
 
 
-# ==========================================
-# UTILS
-# ==========================================
 def is_numeric_node(value: str) -> bool:
     """Match paths like 0> or 0>0|1|2."""
     return re.fullmatch(r"\d>[0-9|]*", value or "") is not None
@@ -69,13 +76,6 @@ def xpath_attrib_find(attrib: str) -> str:
 
 
 def clean_path(base_folder: str, filename: str) -> str:
-    """
-    Join a relative filename to a base folder.
-    Example:
-        base_folder = D:/mods/MyMod
-        filename   = i3d/boxTank.i3d
-        result     = D:/mods/MyMod/i3d/boxTank.i3d
-    """
     filename = (filename or "").replace("\\", "/").strip()
     return os.path.normpath(os.path.join(base_folder, filename))
 
@@ -119,14 +119,10 @@ def find_mod_root(start_path: str) -> str:
 
         parent = os.path.dirname(current)
         if parent == current:
-            # Reached drive root
             return original
         current = parent
 
 
-# ==========================================
-# CORE: I3D MAPPING
-# ==========================================
 def generate_i3d_mapping(i3d_file, unique_names):
     try:
         i3d_text = i3d_file.read()
@@ -150,7 +146,6 @@ def generate_i3d_mapping(i3d_file, unique_names):
         this_node_name = xml_entry.get('name')
         original_name = this_node_name
 
-        # Ensure unique names for depth > 1
         if depth > 1 and this_node_name:
             if this_node_name in unique_names:
                 unique_names[this_node_name] += 1
@@ -160,7 +155,6 @@ def generate_i3d_mapping(i3d_file, unique_names):
             else:
                 unique_names[this_node_name] = 1
 
-        # Component level (depth == 2)
         if depth == 2:
             current_component += 1
             count_depth = []
@@ -169,9 +163,8 @@ def generate_i3d_mapping(i3d_file, unique_names):
             if this_node_name:
                 print_names.append([this_node_name, node_path])
 
-        # Deeper than component (depth > 2)
         elif depth > 2:
-            last_map_index = depth - 2  # index starting below component
+            last_map_index = depth - 2
             if last_map_index > last_depth:
                 count_depth.extend([0] * (last_map_index - last_depth))
             else:
@@ -185,7 +178,6 @@ def generate_i3d_mapping(i3d_file, unique_names):
             if this_node_name:
                 print_names.append([this_node_name, node_path])
 
-    # Build <i3dMappings> as text
     output_queue = ["<i3dMappings>"]
     for name, node in print_names:
         output_queue.append(f'\t<i3dMapping id="{name}" node="{node}" />')
@@ -201,9 +193,6 @@ def generate_i3d_mapping(i3d_file, unique_names):
     return "\n".join(output_queue), this_xml
 
 
-# ==========================================
-# CORE: PROCESS SINGLE VEHICLE XML
-# ==========================================
 def process_xml(xml_path: str, mod_root: str):
     try:
         rel_xml = os.path.relpath(xml_path, mod_root)
@@ -221,7 +210,6 @@ def process_xml(xml_path: str, mod_root: str):
 
         shop_xml = ET.fromstring(xml_content)
 
-        # Find the i3d filename
         i3d_tag = shop_xml.find(".//base/filename")
         if i3d_tag is None or not i3d_tag.text or not i3d_tag.text.strip():
             log("❌ <base><filename> tag missing or empty. Skipping.")
@@ -229,12 +217,10 @@ def process_xml(xml_path: str, mod_root: str):
 
         i3d_filename = i3d_tag.text.strip()
 
-        # Skip $data references (base game)
         if i3d_filename.startswith("$data"):
             log(f"ℹ️ i3d file is in $data ({i3d_filename}). Skipping.")
             return
 
-        # Resolve relative to MOD ROOT (important when XML is in /xml and i3d in /i3d)
         i3d_path = clean_path(mod_root, i3d_filename)
         log(f"📄 i3d path resolved to: {os.path.relpath(i3d_path, mod_root)}")
 
@@ -242,7 +228,6 @@ def process_xml(xml_path: str, mod_root: str):
             log(f"❌ .i3d file not found: {i3d_path}")
             return
 
-        # Generate new i3dMappings and updated i3d XML
         with open(i3d_path, 'r', encoding='utf-8') as i3d_file:
             unique_names = {}
             i3d_mapping_text, updated_i3d_xml = generate_i3d_mapping(
@@ -251,13 +236,11 @@ def process_xml(xml_path: str, mod_root: str):
             if not i3d_mapping_text:
                 return
 
-        # Build cache: numeric node -> name
         map_cache = {}
         i3d_mapping_root = ET.fromstring(i3d_mapping_text)
         for this_map in i3d_mapping_root.findall(XPATH_I3D_MAPPING):
             map_cache[this_map.attrib["node"]] = this_map.attrib["id"]
 
-        # Replace numeric attributes in the XML with i3dMapping IDs
         replaced_count = 0
         for this_type in NODE_TYPES:
             for tag in shop_xml.findall(xpath_attrib_find(this_type)):
@@ -268,20 +251,17 @@ def process_xml(xml_path: str, mod_root: str):
                         replaced_count += 1
         log(f"🔁 Replaced {replaced_count} numeric node reference(s) with i3dMapping IDs.")
 
-        # Handle <i3dMappings> section inside the XML
         existing_mappings = shop_xml.find(XPATH_I3D_MAPPINGS)
         if existing_mappings is not None:
             log("✏️ Found existing <i3dMappings> — replacing contents.")
             for child in list(existing_mappings):
                 existing_mappings.remove(child)
-            # Append new mappings
             for map_item in i3d_mapping_root.findall(XPATH_I3D_MAPPING):
                 existing_mappings.append(map_item)
         else:
             log("➕ Adding new <i3dMappings> section.")
             shop_xml.append(i3d_mapping_root)
 
-        # Fix any <i3dMapping index="0>0|1"> attributes (if they exist)
         fix_count = 0
         for this_tag in shop_xml.findall(XPATH_I3D_MAPPING):
             node_index = this_tag.attrib.get("index")
@@ -291,37 +271,31 @@ def process_xml(xml_path: str, mod_root: str):
         if fix_count:
             log(f"🔧 Fixed {fix_count} i3dMapping index attribute(s).")
 
-        # ==========================================
-        # REMOVE MEMORY USAGE TAGS
-        # ==========================================
         removed_memory_tags = 0
         for tag_name in MEMORY_TAGS:
             for elem in shop_xml.findall(f".//{tag_name}"):
-                # Manual parent search since ElementTree has no getparent()
                 for parent in shop_xml.iter():
                     for child in list(parent):
                         if child is elem:
                             parent.remove(child)
                             removed_memory_tags += 1
                             break
-
         if removed_memory_tags:
             log(f"🧹 Removed {removed_memory_tags} memory usage tag(s).")
         else:
             log("🧹 No memory usage tags found to remove.")
 
-        # Write updated i3d
+
         i3d_output = ET.tostring(updated_i3d_xml.getroot(), encoding='unicode')
         i3d_output = "<?xml version='1.0' encoding='utf-8'?>\n" + i3d_output
         with open(i3d_path, "w", encoding='utf-8') as writer:
             writer.write(i3d_output)
         log(f"💾 Updated i3d file written: {os.path.relpath(i3d_path, mod_root)}")
 
-        # Write updated vehicle XML
+
         try:
             ET.indent(shop_xml, space="    ")
         except AttributeError:
-            # Python < 3.9 has no ET.indent
             pass
 
         xml_output = ET.tostring(shop_xml, encoding='unicode').replace("&gt;", ">")
@@ -336,12 +310,8 @@ def process_xml(xml_path: str, mod_root: str):
         log(f"❌ ERROR while processing {xml_path}: {str(e)}")
 
 
-# ==========================================
-# CORE: PROCESS MODDESC.XML
-# ==========================================
 def process_moddesc(moddesc_path: str):
     mod_root = os.path.dirname(moddesc_path)
-    init_logger(mod_root)
 
     log("")
     log("====================================")
@@ -357,7 +327,6 @@ def process_moddesc(moddesc_path: str):
         log(f"❌ Failed to parse modDesc: {str(e)}")
         return
 
-    # Find all storeItems
     store_items = moddesc_xml.findall(".//storeItems/storeItem")
     if not store_items:
         log("⚠️ No <storeItems><storeItem> entries found in modDesc.")
@@ -379,48 +348,55 @@ def process_moddesc(moddesc_path: str):
 
 
 def main():
+    global CURRENT_MOD_ROOT
+
     if len(sys.argv) < 2:
-        print("Drag and drop a modDesc.xml or a vehicle XML onto this script.")
+        print("Drag and drop one or more XML files onto this script.")
         print("Usage:")
-        print("  python rmc_i3d_mapper.py <modDesc.xml>")
-        print("  python rmc_i3d_mapper.py <vehicle.xml>")
+        print("  python rmc_i3d_mapper.py <file1.xml> <file2.xml> ...")
         try:
             input("\nPress Enter to exit...")
         except EOFError:
             pass
         return
 
-    input_path = sys.argv[1]
-    input_path = os.path.abspath(input_path)
+    processed_any = False
 
-    if not os.path.isfile(input_path):
-        print(f"❌ File not found: {input_path}")
-        try:
-            input("\nPress Enter to exit...")
-        except EOFError:
-            pass
-        return
+    for input_path in sys.argv[1:]:
+        input_path = os.path.abspath(input_path)
 
-    filename_lower = os.path.basename(input_path).lower()
+        if not os.path.isfile(input_path):
+            print(f"❌ File not found: {input_path}")
+            continue
 
-    # Case 1: modDesc.xml -> process all storeItems
-    if filename_lower == "moddesc.xml":
-        process_moddesc(input_path)
-
-    # Case 2: single vehicle XML -> work out mod root and process only that XML
-    else:
+        filename_lower = os.path.basename(input_path).lower()
         mod_root = find_mod_root(input_path)
-        init_logger(mod_root)
-        log("")
-        log(f"Detected mod root: {mod_root}")
-        process_xml(input_path, mod_root)
+
+        if mod_root != CURRENT_MOD_ROOT:
+            init_logger(mod_root)
+            log(f"Detected mod root: {mod_root}")
+
+        if filename_lower == "moddesc.xml":
+            log(f"Processing modDesc: {input_path}")
+            process_moddesc(input_path)
+            processed_any = True
+        else:
+            log(f"Processing vehicle XML: {input_path}")
+            process_xml(input_path, mod_root)
+            processed_any = True
+
+    if not processed_any:
+        print("No valid XML files processed.")
+        try:
+            input("\nPress Enter to exit...")
+        except EOFError:
+            pass
+        return
 
 
 if __name__ == "__main__":
-    # Run main logic
     main()
 
-    # Fancy banner shown AFTER work is done
     banner = r"""
 ***********************************************
 *         Developed by GamerDesigns            *
@@ -437,7 +413,6 @@ if __name__ == "__main__":
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(banner + "\n")
 
-    # Always try to pause at the very end
     try:
         input("Press Enter to exit...")
     except EOFError:

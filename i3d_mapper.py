@@ -11,7 +11,7 @@ NODE_TYPES = [
     "rotateNode", "referencePoint", "referenceFrame", "index", "effectNode",
     "attachReferenceNode", "lightShaderNode", "driveNode", "realLightNode",
     "targetNode", "baseNode", "playerTriggerNode", "vehicleTriggerNode",
-    "visibilityNode", "triggerNode", "activeNode", "inactiveNode", "numbers"
+    "visibilityNode", "triggerNode", "activeNode", "inactiveNode", "numbers", "realLight"
 ]
 
 XPATH_I3D_MAPPING = ".//i3dMapping"
@@ -417,3 +417,4 @@ if __name__ == "__main__":
         input("Press Enter to exit...")
     except EOFError:
         pass
+
